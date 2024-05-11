@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: test
+      image: svenstaro/miniserve:latest
+      args: ["/data"]

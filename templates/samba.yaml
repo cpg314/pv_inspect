@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: test
+      image: dperson/samba
+      args: ["-s", "public;/data"]
