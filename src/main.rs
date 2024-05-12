@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::Parser;
+use futures::StreamExt;
 use k8s_openapi::api::core::v1::{
     PersistentVolumeClaim, PersistentVolumeClaimVolumeSource, Pod, Volume, VolumeMount,
 };
@@ -11,6 +12,7 @@ use kube::api::{Api, AttachParams};
 use kube::runtime::conditions::is_deleted;
 use kube::runtime::wait::{await_condition, Condition};
 use log::*;
+use tokio::io::AsyncWriteExt;
 
 /// Mount a PVC on a new pod, shell into it, and port-forward if desired.
 #[derive(Parser)]
@@ -212,7 +214,7 @@ sudo mount -t cifs //127.0.0.1/public samba -o port=8080 -o password=\"\""
             }
         }
         info!("Connecting to pod. Type Control+D to exit the shell");
-        // As in kube/examples/pod_shell.rs
+        // As in kube/examples/pod_shell_crossterm.rs
         let mut exec = pods
             .exec(
                 &pod_name,
@@ -220,22 +222,37 @@ sudo mount -t cifs //127.0.0.1/public samba -o port=8080 -o password=\"\""
                 &AttachParams::interactive_tty(),
             )
             .await?;
-        let mut stdin_writer = exec.stdin().unwrap();
-        let mut stdout_reader = exec.stdout().unwrap();
-        let mut stdin = tokio::io::stdin();
+        crossterm::terminal::enable_raw_mode()?;
+        let mut stdin = tokio_util::io::ReaderStream::new(tokio::io::stdin());
         let mut stdout = tokio::io::stdout();
-        tokio::spawn(async move {
-            tokio::io::copy(&mut stdin, &mut stdin_writer)
-                .await
-                .unwrap();
-        });
-        tokio::spawn(async move {
-            tokio::io::copy(&mut stdout_reader, &mut stdout)
-                .await
-                .unwrap();
-        });
-        exec.join().await?;
-        println!();
+        let mut output = tokio_util::io::ReaderStream::new(exec.stdout().unwrap());
+        let mut input = exec.stdin().unwrap();
+        loop {
+            tokio::select! {
+                message = stdin.next() => {
+                    match message {
+                        Some(Ok(message)) => {
+                            let _ = input.write(&message).await?;
+                        }
+                        _ => {
+                            break;
+                        },
+                    }
+                },
+                message = output.next() => {
+                    match message {
+                        Some(Ok(message)) => {
+                            let _ = stdout.write(&message).await?;
+                            stdout.flush().await?;
+                        },
+                        _ => {
+                            break
+                        },
+                    }
+                },
+            };
+        }
+        crossterm::terminal::disable_raw_mode()?;
 
         // Cleanup
         if let Some(mut forward) = forward {
@@ -288,4 +305,6 @@ async fn main() {
         error!("{}", e);
         std::process::exit(2);
     }
+    // Necessary because we intercepted the signal
+    std::process::exit(0);
 }
