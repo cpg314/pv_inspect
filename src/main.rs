@@ -27,6 +27,9 @@ struct Flags {
     /// Bind a port on the pod. Format: host:pod
     #[clap(long)]
     port: Option<PortBind>,
+    /// Mount the volume in read/write mode rather than read only.
+    #[clap(long)]
+    rw: bool,
 }
 
 #[derive(Clone)]
@@ -87,6 +90,10 @@ async fn main_impl() -> anyhow::Result<()> {
 
     let pvcs_list = pvcs.list(&Default::default()).await?;
     if let Some(name) = args.name {
+        let read_only = Some(!args.rw);
+        if args.rw {
+            warn!("Volume will be mounted in read/write mode");
+        }
         anyhow::ensure!(
             pvcs_list.into_iter().any(|pvc| pvc
                 .metadata()
@@ -131,7 +138,7 @@ async fn main_impl() -> anyhow::Result<()> {
             name: "data".into(),
             persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
                 claim_name: name,
-                read_only: Some(true),
+                read_only,
             }),
             ..Default::default()
         });
@@ -140,7 +147,7 @@ async fn main_impl() -> anyhow::Result<()> {
             mounts.push(VolumeMount {
                 mount_path: "/data".into(),
                 name: "data".into(),
-                read_only: Some(true),
+                read_only,
                 ..Default::default()
             });
         }

@@ -49,6 +49,9 @@ Options:
       --port <PORT>
           Bind a port on the pod. Format: host:pod
 
+      --rw
+          Mount the volume in read/write mode rather than read only
+
   -h, --help
           Print help (see a summary with '-h')
 ```
