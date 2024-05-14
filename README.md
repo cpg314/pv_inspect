@@ -1,4 +1,4 @@
-## pv_inspect
+# pv_inspect
 
 Mount a Kubernetes PersistentVolumeClaim volume on a new pod, shell into it, and port-forward if desired. Delete the pod when done.
 
@@ -10,7 +10,7 @@ Three pod templates are provided (see the `templates` directory):
 
 Custom templates can be passed with the `--template-yaml` option. A `data` volume/volume mount is automatically added and mounted on `/data`.
 
-### Installation
+## Installation
 
 See the packages on the [releases page](https://github.com/cpg314/pv_inspect/releases).
 
@@ -20,7 +20,7 @@ Alternatively, compile with cargo:
 $ cargo install --git https://github.com/cpg314/pv_inspect
 ```
 
-### Usage
+## Usage
 
 ```
 Mount a PVC on a new pod, shell into it, and port-forward if desired
@@ -56,7 +56,29 @@ Options:
           Print help (see a summary with '-h')
 ```
 
-#### Examples
+### As a `k9s` plugin
+
+If you use the [k9s Kubernetes TUI](https://k9scli.io/), you can install `pv_inspect` as a plugin by editing your plugins configuration (see the output of `k9s info`) as follows:
+
+```yaml
+plugins:
+  pv_inspect:
+    shortCut: p
+    description: pv_inspect
+    scopes:
+      - pvc
+    command: pv_inspect
+    args:
+      - -n
+      - $NAMESPACE
+      - $NAME
+```
+
+When viewing `PersistentVolumeClaims`, the `p` key (or any other you might choose) will launch `pv_inspect`:
+
+![k9s creenshot](k9s.png)
+
+### Examples
 
 With the default template (`miniserve`):
 
