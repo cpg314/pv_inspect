@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: main
+      image: linuxserver/openssh-server
+      env:
+        - name: SUDO_ACCESS
+          value: "true"
+        - name: USER_NAME
+          value: "ssh"
+        - name: LOG_STDOUT
+          value: "true"
+        - name: PUID
+          value: "0"

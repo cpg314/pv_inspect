@@ -1,10 +1,11 @@
+use std::io::BufRead;
+use std::net::TcpListener;
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use clap::Parser;
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::{
-    PersistentVolumeClaim, PersistentVolumeClaimVolumeSource, Pod, Volume, VolumeMount,
+    EnvVar, PersistentVolumeClaim, PersistentVolumeClaimVolumeSource, Pod, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::Metadata;
@@ -14,63 +15,19 @@ use kube::runtime::wait::{await_condition, Condition};
 use log::*;
 use tokio::io::AsyncWriteExt;
 
-/// Mount a PVC on a new pod, shell into it, and port-forward if desired.
+/// Mount a PVC on a new pod, shell into it, and mount if (via SSHFS) if desired.
 #[derive(Parser)]
+#[clap(version)]
 struct Flags {
     #[clap(long, short, default_value = "default")]
     namespace: String,
     /// Name of the PVC to inspect
     name: Option<String>,
-    #[clap(long, value_enum, default_value_t=Template::Miniserve)]
-    template: Template,
-    /// Alternatively, path to a custom pod template
-    #[clap(long, conflicts_with = "template")]
-    template_yaml: Option<PathBuf>,
-    /// Bind a port on the pod. Format: host:pod
-    #[clap(long)]
-    port: Option<PortBind>,
+    #[clap(long, short)]
+    mountpoint: Option<PathBuf>,
     /// Mount the volume in read/write mode rather than read only.
     #[clap(long)]
     rw: bool,
-}
-
-#[derive(Clone)]
-struct PortBind {
-    host: u16,
-    pod: u16,
-}
-impl std::fmt::Display for PortBind {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}:{}", self.host, self.pod)
-    }
-}
-
-impl FromStr for PortBind {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Ok(s) = u16::from_str(s) {
-            Ok(Self { host: s, pod: s })
-        } else {
-            let (host, pod) = s
-                .split_once(',')
-                .ok_or_else(|| anyhow::anyhow!("Invalid port binding"))?;
-            Ok(Self {
-                host: u16::from_str(host)?,
-                pod: u16::from_str(pod)?,
-            })
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, clap::ValueEnum)]
-enum Template {
-    /// Shell and miniserve port-forwarded on 8080:8080
-    Miniserve,
-    /// A pod that sleeps
-    Sleep,
-    /// Shell and Samba mount port-forwarded on 8080:445
-    Samba,
 }
 
 #[derive(tabled::Tabled)]
@@ -81,10 +38,11 @@ struct Pvc {
 }
 
 async fn main_impl() -> anyhow::Result<()> {
-    let mut args = Flags::parse();
+    let args = Flags::parse();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let mut config = kube::Config::infer().await?;
+    info!("Connecting to cluster {}", config.cluster_url);
     config.read_timeout = None;
     config.write_timeout = None;
     let client = kube::Client::try_from(config)?;
@@ -105,29 +63,23 @@ async fn main_impl() -> anyhow::Result<()> {
             "PVC {} not found",
             name
         );
+
+        info!("Generating keys");
+        let key = ssh_key::PrivateKey::random(
+            &mut rand_core::OsRng,
+            ssh_key::Algorithm::new("ssh-ed25519")?,
+        )?;
+        let key_file = tempfile::NamedTempFile::new()?;
+        key.write_openssh_file(key_file.path(), ssh_key::LineEnding::default())?;
+
         info!("Creating pod");
-        let yaml = match (&args.template_yaml, &args.template) {
-            (Some(path), _) => {
-                info!("Using template at {:?}", path);
-                std::fs::read_to_string(path)?
-            }
-            (None, Template::Miniserve) => {
-                args.port = Some(PortBind {
-                    host: 8080,
-                    pod: 8080,
-                });
-                include_str!("../templates/miniserve.yaml").into()
-            }
-            (None, Template::Sleep) => include_str!("../templates/sleep.yaml").into(),
-            (None, Template::Samba) => {
-                args.port = Some(PortBind {
-                    host: 8080,
-                    pod: 445,
-                });
-                include_str!("../templates/samba.yaml").into()
-            }
-        };
-        let mut pod: Pod = serde_yaml::from_str(&yaml)?;
+        let yaml = include_str!("../templates/ssh.yaml");
+
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let port = listener.local_addr()?.port();
+        drop(listener);
+
+        let mut pod: Pod = serde_yaml::from_str(yaml)?;
         pod.metadata = ObjectMeta {
             generate_name: Some(format!("pvc-inspect-{}-", name)),
             namespace: Some(args.namespace.clone()),
@@ -135,6 +87,7 @@ async fn main_impl() -> anyhow::Result<()> {
             ..Default::default()
         };
         let spec = pod.spec.get_or_insert(Default::default());
+
         let volumes = spec.volumes.get_or_insert(Default::default());
         volumes.push(Volume {
             name: "data".into(),
@@ -144,7 +97,14 @@ async fn main_impl() -> anyhow::Result<()> {
             }),
             ..Default::default()
         });
+
         for container in &mut spec.containers {
+            let env = container.env.get_or_insert(Default::default());
+            env.push(EnvVar {
+                name: "PUBLIC_KEY".into(),
+                value: Some(key.public_key().to_openssh()?),
+                ..Default::default()
+            });
             let mounts = container.volume_mounts.get_or_insert(Default::default());
             mounts.push(VolumeMount {
                 mount_path: "/data".into(),
@@ -178,20 +138,47 @@ async fn main_impl() -> anyhow::Result<()> {
         }
 
         await_condition(pods.clone(), &pod_name, PodReady {}).await?;
+        std::thread::sleep(std::time::Duration::from_secs(1));
 
         info!("Pod created");
-        let forward = if let Some(port) = args.port {
-            info!("Starting port forwarding on port {}", port);
+        info!("Starting port forwarding on port {}", port);
+        // TODO: We could do this with Kube directly
+        let mut forward = std::process::Command::new("kubectl")
+            .args([
+                "-n",
+                &args.namespace,
+                "port-forward",
+                &pod_name,
+                &format!("{}:2222", port),
+            ])
+            .stdout(std::process::Stdio::piped())
+            .spawn()?;
+        let stdout = forward.stdout.take().unwrap();
+        let mut stdout = std::io::BufReader::new(stdout);
+        let mut line = String::new();
+        stdout.read_line(&mut line)?;
+
+        let mount = if let Some(mountpoint) = args.mountpoint {
+            info!("Mounting on {:?}", mountpoint);
+            std::fs::create_dir_all(&mountpoint)?;
             Some(
-                // TODO: We could do this with Kube directly
-                std::process::Command::new("kubectl")
+                std::process::Command::new("sshfs")
                     .args([
-                        "-n",
-                        &args.namespace,
-                        "port-forward",
-                        &pod_name,
+                        "ssh@127.0.0.1:/data",
+                        "-o",
+                        "auto_unmount",
+                        "-o",
+                        "UserKnownHostsFile=/dev/null",
+                        "-o",
+                        &format!("IdentityFile={}", key_file.path().to_str().unwrap()),
+                        "-o",
+                        "StrictHostKeyChecking=no",
+                        "-f",
+                        "-p",
                         &port.to_string(),
+                        mountpoint.to_str().unwrap(),
                     ])
+                    .stderr(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .spawn()?,
             )
@@ -199,20 +186,6 @@ async fn main_impl() -> anyhow::Result<()> {
             None
         };
 
-        if args.template_yaml.is_none() {
-            match args.template {
-                Template::Miniserve => {
-                    info!("Miniserve on http://localhost:8080");
-                }
-                Template::Samba => {
-                    info!(
-                        "Mount samba share with
-sudo mount -t cifs //127.0.0.1/public samba -o port=8080 -o password=\"\""
-                    );
-                }
-                _ => {}
-            }
-        }
         info!("Connecting to pod. Type Control+D to exit the shell");
         // As in kube/examples/pod_shell_crossterm.rs
         let mut exec = pods
@@ -255,10 +228,13 @@ sudo mount -t cifs //127.0.0.1/public samba -o port=8080 -o password=\"\""
         crossterm::terminal::disable_raw_mode()?;
 
         // Cleanup
-        if let Some(mut forward) = forward {
-            info!("Stopping port forwarding");
-            forward.kill()?;
+
+        if let Some(mut mount) = mount {
+            info!("Unmounting");
+            mount.kill()?;
         }
+        info!("Stopping port forwarding");
+        forward.kill()?;
         info!("Deleting pod");
         info!("Waiting for deletion");
         pods.delete(&pod_name, &Default::default()).await?;
@@ -270,6 +246,7 @@ sudo mount -t cifs //127.0.0.1/public samba -o port=8080 -o password=\"\""
         .await?;
         info!("Pod deleted");
     } else {
+        info!("No PVC name provided, listing...");
         let table = pvcs_list.into_iter().map(|a| {
             let meta = a.metadata();
             Pvc {
