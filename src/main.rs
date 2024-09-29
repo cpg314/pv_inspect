@@ -10,7 +10,7 @@ use k8s_openapi::api::core::v1::{
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::Metadata;
-use kube::api::{Api, AttachParams};
+use kube::api::{Api, AttachParams, ListParams};
 use kube::runtime::conditions::is_deleted;
 use kube::runtime::wait::{await_condition, Condition};
 use log::*;
@@ -32,6 +32,12 @@ struct Flags {
     /// Do not wait until the pod has been deleted.
     #[clap(long)]
     nowait: bool,
+    /// Cleanup stale pv_inspect pods and exit
+    #[clap(long)]
+    cleanup: bool,
+    /// Age in minutes to cleanup pods
+    #[clap(long,default_value_t=4*60)]
+    cleanup_min: u64,
 }
 
 #[derive(tabled::Tabled)]
@@ -50,6 +56,37 @@ async fn main_impl() -> anyhow::Result<()> {
     config.read_timeout = None;
     config.write_timeout = None;
     let client = kube::Client::try_from(config)?;
+    if args.cleanup {
+        info!(
+            "Cleaning up stale pods (older than {} minutes)",
+            args.cleanup_min
+        );
+        let pods: Api<Pod> = Api::all(client.clone());
+        let mut pods_list = pods
+            .list(&ListParams::default().labels("pv-inspect=1"))
+            .await?
+            .items;
+        let now = chrono::Utc::now();
+        let limit = chrono::Duration::minutes(args.cleanup_min as i64);
+        pods_list.retain(|pod| {
+            pod.metadata
+                .creation_timestamp
+                .as_ref()
+                .map_or(false, |t| now - t.0 > limit)
+        });
+        info!("Found {} pods to delete", pods_list.len());
+        for p in pods_list {
+            let api: Api<Pod> = Api::namespaced(client.clone(), &p.metadata.namespace.unwrap());
+            let name = p.metadata.name.unwrap();
+            api.delete(&name, &Default::default()).await?;
+            if !args.nowait {
+                await_condition(api.clone(), &name, is_deleted(&p.metadata.uid.unwrap())).await?;
+            }
+        }
+        info!("Done");
+        return Ok(());
+    }
+
     let pvcs: Api<PersistentVolumeClaim> = Api::namespaced(client.clone(), &args.namespace);
 
     let pvcs_list = pvcs.list(&Default::default()).await?;
