@@ -1,6 +1,15 @@
 # pv_inspect
 
-Mount a Kubernetes PersistentVolumeClaim volume on a new pod, shell into it, mount it (via SSHFS) if desired. Delete the pod when done.
+Small utility to "shell into" a Kubernetes volume and mount it locally if desired.
+
+This allows easily inspecting or accessing volumes, even when they are not already mounted.
+
+This works by automatically:
+
+- Creating a new pod with the volume attached.
+- Opening a shell into the pod.
+- Optionally mounting the volume locally via SSHFS, after port forwarding on an OpenSSH server running on the pod.
+- Deleting the pod when the tool is exited.
 
 ## Installation
 
@@ -15,7 +24,7 @@ $ cargo install --git https://github.com/cpg314/pv_inspect
 ## Usage
 
 ```
-Mount a PVC on a new pod, shell into it, and mount if (via SSHFS) if desired
+Mount a PVC on a new pod, shell into it, and mount it (via SSHFS) if desired
 
 Usage: pv_inspect [OPTIONS] [NAME]
 
@@ -28,6 +37,14 @@ Options:
       --rw                       Mount the volume in read/write mode rather than read only
   -h, --help                     Print help
   -V, --version                  Print version
+```
+
+For example:
+
+```console
+$ pv_inspect -n mynamespace --rw mypvc
+$ # Mount locally
+$ pv_inspect -n mynamespace --rw -m ~/mounts/volume mypvc
 ```
 
 ### As a `k9s` plugin
@@ -50,4 +67,10 @@ plugins:
 
 When viewing `PersistentVolumeClaims`, the `p` key (or any other you might choose) will launch `pv_inspect`:
 
-![k9s creenshot](k9s.png)
+![k9s screenshot](k9s.png)
+
+## TODO
+
+- `rsync`-style subcommand.
+- Cronjob to clear dangling pods.
+- Check if `sshfs` exists.

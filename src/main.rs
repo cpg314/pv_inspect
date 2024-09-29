@@ -15,7 +15,7 @@ use kube::runtime::wait::{await_condition, Condition};
 use log::*;
 use tokio::io::AsyncWriteExt;
 
-/// Mount a PVC on a new pod, shell into it, and mount if (via SSHFS) if desired.
+/// Mount a PVC on a new pod, shell into it, and mount it (via SSHFS) if desired.
 #[derive(Parser)]
 #[clap(version)]
 struct Flags {
