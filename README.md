@@ -35,6 +35,7 @@ Options:
   -n, --namespace <NAMESPACE>    [default: default]
   -m, --mountpoint <MOUNTPOINT>
       --rw                       Mount the volume in read/write mode rather than read only
+      --nowait                   Do not wait until the pod has been deleted
   -h, --help                     Print help
   -V, --version                  Print version
 ```

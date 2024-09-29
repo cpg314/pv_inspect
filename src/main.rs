@@ -29,6 +29,9 @@ struct Flags {
     /// Mount the volume in read/write mode rather than read only.
     #[clap(long)]
     rw: bool,
+    /// Do not wait until the pod has been deleted.
+    #[clap(long)]
+    nowait: bool,
 }
 
 #[derive(tabled::Tabled)]
@@ -244,15 +247,17 @@ async fn main_impl() -> anyhow::Result<()> {
         info!("Stopping port forwarding");
         forward.kill()?;
         info!("Deleting pod");
-        info!("Waiting for deletion");
         pods.delete(&pod_name, &Default::default()).await?;
-        await_condition(
-            pods.clone(),
-            &pod_name,
-            is_deleted(&pod.metadata.uid.unwrap()),
-        )
-        .await?;
-        info!("Pod deleted");
+        if !args.nowait {
+            info!("Waiting for deletion");
+            await_condition(
+                pods.clone(),
+                &pod_name,
+                is_deleted(&pod.metadata.uid.unwrap()),
+            )
+            .await?;
+            info!("Pod deleted");
+        }
     } else {
         info!("No PVC name provided, listing...");
         let table = pvcs_list.into_iter().map(|a| {
