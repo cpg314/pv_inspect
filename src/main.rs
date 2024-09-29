@@ -11,10 +11,14 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::Metadata;
 use kube::api::{Api, AttachParams, ListParams};
+use kube::core::PartialObjectMetaExt;
 use kube::runtime::conditions::is_deleted;
 use kube::runtime::wait::{await_condition, Condition};
 use log::*;
 use tokio::io::AsyncWriteExt;
+
+const LABEL_KEY: &str = "pv-inspect";
+const LABEL_DELETE: &str = "0";
 
 /// Mount a PVC on a new pod, shell into it, and mount it (via SSHFS) if desired.
 #[derive(Parser)]
@@ -63,7 +67,7 @@ async fn main_impl() -> anyhow::Result<()> {
         );
         let pods: Api<Pod> = Api::all(client.clone());
         let mut pods_list = pods
-            .list(&ListParams::default().labels("pv-inspect=1"))
+            .list_metadata(&ListParams::default().labels(LABEL_KEY))
             .await?
             .items;
         let now = chrono::Utc::now();
@@ -73,6 +77,9 @@ async fn main_impl() -> anyhow::Result<()> {
                 .creation_timestamp
                 .as_ref()
                 .map_or(false, |t| now - t.0 > limit)
+                || pod.metadata.labels.as_ref().map_or(false, |labels| {
+                    labels.get(LABEL_KEY).map(|l| l.as_str()) == Some(LABEL_DELETE)
+                })
         });
         info!("Found {} pods to delete", pods_list.len());
         for p in pods_list {
@@ -124,7 +131,7 @@ async fn main_impl() -> anyhow::Result<()> {
         pod.metadata = ObjectMeta {
             generate_name: Some(format!("pvc-inspect-{}-", name)),
             namespace: Some(args.namespace.clone()),
-            labels: Some([("pv-inspect".into(), "1".into())].into()),
+            labels: Some([(LABEL_KEY.into(), "1".into())].into()),
             ..Default::default()
         };
         let spec = pod.spec.get_or_insert(Default::default());
@@ -284,6 +291,19 @@ async fn main_impl() -> anyhow::Result<()> {
         info!("Stopping port forwarding");
         forward.kill()?;
         info!("Deleting pod");
+        // Edit the label to mark the pod for deletion, to cover the use case where the user might
+        // not have the right to delete pods
+        let metadata = ObjectMeta {
+            labels: Some([(LABEL_KEY.into(), LABEL_DELETE.into())].into()),
+            ..Default::default()
+        }
+        .into_request_partial::<Pod>();
+        pods.patch_metadata(
+            &pod_name,
+            &kube::api::PatchParams::apply("pv_inspect").force(),
+            &kube::api::Patch::Apply(metadata),
+        )
+        .await?;
         pods.delete(&pod_name, &Default::default()).await?;
         if !args.nowait {
             info!("Waiting for deletion");

@@ -36,6 +36,8 @@ Options:
   -m, --mountpoint <MOUNTPOINT>
       --rw                       Mount the volume in read/write mode rather than read only
       --nowait                   Do not wait until the pod has been deleted
+      --cleanup                    Cleanup stale pv_inspect pods and exit
+      --cleanup-min <CLEANUP_MIN>  Age in minutes to cleanup pods [default: 240]
   -h, --help                     Print help
   -V, --version                  Print version
 ```
@@ -70,7 +72,10 @@ When viewing `PersistentVolumeClaims`, the `p` key (or any other you might choos
 
 ![k9s screenshot](k9s.png)
 
+## Cleanup
+
+The `--cleanup` command allows delete `pv_inspect` dangling pods, due to the client aborting before deletion. It can also be executed on the cluster as a cronjob, see [`cleanup_job.yaml`](cleanup_job.yaml).
+
 ## TODO
 
 - `rsync`-style subcommand.
-- Cronjob to clear dangling pods.

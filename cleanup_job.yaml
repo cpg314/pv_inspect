@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pv-inspect-cleanup
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          serviceAccountName: pv-inspect
+          containers:
+            - name: main
+              imagePullPolicy: Always
+              image: ghcr.io/cpg314/pv_inspect:0.1.3
+              command: ["pv_inspect", "--cleanup", "--cleanup-min=240"]
+          restartPolicy: Never
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pv-inspect
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - delete
+      - patch
+      - watch
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pv-inspect
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pv-inspect
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pv-inspect
+subjects:
+  - kind: ServiceAccount
+    name: pv-inspect
+    namespace: default
