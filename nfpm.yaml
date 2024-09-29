@@ -7,6 +7,8 @@ section: "default"
 priority: "extra"
 provides:
   - pv_inspect
+depends:
+  - sshfs
 description: "Mount a PVC on a new pod, shell into it, and port-forward if desired."
 vendor: "cpg314"
 maintainer: "cpg314 <44120267+cpg314@users.noreply.github.com>"

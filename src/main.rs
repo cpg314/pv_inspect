@@ -2,6 +2,7 @@ use std::io::BufRead;
 use std::net::TcpListener;
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Parser;
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::{
@@ -21,7 +22,7 @@ use tokio::io::AsyncWriteExt;
 struct Flags {
     #[clap(long, short, default_value = "default")]
     namespace: String,
-    /// Name of the PVC to inspect
+    /// Name of the PVC to inspect. If not provided, a list will be shown.
     name: Option<String>,
     #[clap(long, short)]
     mountpoint: Option<PathBuf>,
@@ -161,27 +162,34 @@ async fn main_impl() -> anyhow::Result<()> {
         let mount = if let Some(mountpoint) = args.mountpoint {
             info!("Mounting on {:?}", mountpoint);
             std::fs::create_dir_all(&mountpoint)?;
-            Some(
-                std::process::Command::new("sshfs")
-                    .args([
-                        "ssh@127.0.0.1:/data",
-                        "-o",
-                        "auto_unmount",
-                        "-o",
-                        "UserKnownHostsFile=/dev/null",
-                        "-o",
-                        &format!("IdentityFile={}", key_file.path().to_str().unwrap()),
-                        "-o",
-                        "StrictHostKeyChecking=no",
-                        "-f",
-                        "-p",
-                        &port.to_string(),
-                        mountpoint.to_str().unwrap(),
-                    ])
-                    .stderr(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .spawn()?,
-            )
+            let child = std::process::Command::new("sshfs")
+                .args([
+                    "ssh@127.0.0.1:/data",
+                    "-o",
+                    "auto_unmount",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    &format!("IdentityFile={}", key_file.path().to_str().unwrap()),
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-f",
+                    "-p",
+                    &port.to_string(),
+                    mountpoint.to_str().unwrap(),
+                ])
+                .stderr(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .spawn();
+            match child {
+                Ok(child) => Some(child),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    anyhow::bail!("`sshfs` not found in PATH.")
+                }
+                Err(e) => {
+                    return Err(e).context("Failed to mount via SSHFS");
+                }
+            }
         } else {
             None
         };

@@ -29,7 +29,7 @@ Mount a PVC on a new pod, shell into it, and mount it (via SSHFS) if desired
 Usage: pv_inspect [OPTIONS] [NAME]
 
 Arguments:
-  [NAME]  Name of the PVC to inspect
+  [NAME]  Name of the PVC to inspect. If not provided, a list will be shown.
 
 Options:
   -n, --namespace <NAMESPACE>    [default: default]
@@ -73,4 +73,3 @@ When viewing `PersistentVolumeClaims`, the `p` key (or any other you might choos
 
 - `rsync`-style subcommand.
 - Cronjob to clear dangling pods.
-- Check if `sshfs` exists.
