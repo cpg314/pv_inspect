@@ -3,7 +3,7 @@ kind: Pod
 spec:
   containers:
     - name: main
-      image: linuxserver/openssh-server
+      image: linuxserver/openssh-server:9.7_p1-r4-ls169
       env:
         - name: SUDO_ACCESS
           value: "true"
@@ -13,3 +13,6 @@ spec:
           value: "true"
         - name: PUID
           value: "0"
+      readinessProbe:
+        tcpSocket:
+          port: 2222
