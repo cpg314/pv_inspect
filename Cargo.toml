@@ -2,6 +2,10 @@
 name = "pv_inspect"
 version = "0.1.4"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Mount a Kubernetes PersistentVolumeClaim volume on a new pod, shell into it, and mount it via SSHFS "
+repository = "https://github.com/cpg314/pv_inspect"
+categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]
 anyhow = "1.0.83"
